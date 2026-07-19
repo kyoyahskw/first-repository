@@ -1,0 +1,607 @@
+<script>
+// ============================================================
+// JavaScript.html — 個人資産管理アプリ フロントエンドロジック
+// Alpine.js v3 + Chart.js v4 を使用
+// ============================================================
+
+/** Chart.js で使うカラーパレット */
+const CHART_COLORS = [
+  '#38bdf8', '#10b981', '#a78bfa', '#f59e0b',
+  '#f43f5e', '#fb923c', '#34d399', '#60a5fa',
+  '#c084fc', '#4ade80', '#22d3ee', '#818cf8',
+];
+
+/**
+ * Alpine.js アプリケーションデータ関数
+ * x-data="assetApp()" で使用
+ */
+function assetApp() {
+  return {
+
+    // =============================================
+    // 状態変数
+    // =============================================
+
+    // --- ローディング ---
+    loading:      true,
+    loadingText:  '初期データを読み込み中...',
+
+    // --- Toast ---
+    toast:        { show: false, message: '', type: 'success', icon: 'fas fa-circle-check' },
+    _toastTimer:  null,
+
+    // --- タブ管理 ---
+    tab: 'dashboard',
+
+    // --- サーバーから取得したマスターデータ ---
+    categories:     [],   // [{genre_id, genre_name, item_id, item_name, is_active}]
+    monthList:      [],   // ['2026-07', '2026-06', ...]  降順
+    currentMonth:   '',   // 'YYYY-MM'
+    allMonthlyData: [],   // [{month, total, genreTotals, records}]  月昇順
+
+    // --- ダッシュボード ---
+    selectedPieMonth:   '',
+    trendMode:          'total',   // 'total' | 'genre'
+    latestTotal:        0,
+    latestMonth:        '',
+    latestGenreTotals:  [],        // [{genre_name, total}]
+    _pieChart:          null,      // Chart インスタンス
+    _trendChart:        null,
+
+    // --- 入力タブ ---
+    inputMonth:       '',
+    inputRecords:     {},    // { item_id: number }
+    hasExistingData:  false,
+    expandedGenres:   [],    // 展開中のジャンルID
+    saving:           false,
+
+    // --- 設定タブ ---
+    settingsGenres: [],
+    newGenreName:   '',
+    savingSettings: false,
+
+    // --- 削除モーダル ---
+    showDeleteModal:   false,
+    deleteTargetMonth: '',
+
+    // =============================================
+    // Computed（Alpine.js ゲッター）
+    // =============================================
+
+    /**
+     * 有効（is_active=true）な項目をジャンルごとにグループ化して返す
+     */
+    get activeGenres() {
+      const map = new Map();
+      this.categories
+        .filter(c => c.is_active)
+        .forEach(c => {
+          if (!map.has(c.genre_id)) {
+            map.set(c.genre_id, {
+              genre_id:   c.genre_id,
+              genre_name: c.genre_name,
+              items:      [],
+            });
+          }
+          map.get(c.genre_id).items.push(c);
+        });
+      return Array.from(map.values());
+    },
+
+    /**
+     * 入力フォームの現在の合計金額
+     */
+    get inputTotal() {
+      return Object.values(this.inputRecords)
+        .reduce((sum, v) => sum + (Number(v) || 0), 0);
+    },
+
+    // =============================================
+    // 初期化
+    // =============================================
+
+    /**
+     * x-init から呼ばれる初期化処理
+     */
+    init() {
+      this.loadingText = '初期データを読み込み中...';
+      google.script.run
+        .withSuccessHandler((data) => {
+          this.categories      = data.categories     || [];
+          this.monthList       = data.monthList      || [];
+          this.currentMonth    = data.currentMonth   || '';
+          this.allMonthlyData  = data.allMonthlyData || [];
+
+          this.inputMonth       = data.currentMonth;
+          this.selectedPieMonth = this.monthList[0] || data.currentMonth;
+
+          // 有効なジャンルをデフォルト展開
+          this.expandedGenres = [
+            ...new Set(this.categories.filter(c => c.is_active).map(c => c.genre_id))
+          ];
+
+          this.computeDashboard();
+          this.loading = false;
+
+          // Alpine が DOM を更新した後にグラフを描画
+          this.$nextTick(() => {
+            this.updatePieChart();
+            this.updateTrendChart();
+          });
+        })
+        .withFailureHandler((err) => {
+          this.loading = false;
+          this.showToast('データ読み込みに失敗しました: ' + (err.message || err), 'error');
+        })
+        .getInitialData();
+    },
+
+    // =============================================
+    // Toast
+    // =============================================
+
+    showToast(message, type = 'success') {
+      clearTimeout(this._toastTimer);
+      const icon = type === 'success'
+        ? 'fas fa-circle-check'
+        : 'fas fa-circle-xmark';
+      this.toast = { show: true, message, type, icon };
+      this._toastTimer = setTimeout(() => { this.toast.show = false; }, 3800);
+    },
+
+    // =============================================
+    // フォーマッター
+    // =============================================
+
+    formatCurrency(v) {
+      return '¥' + (Math.round(Number(v) || 0)).toLocaleString('ja-JP');
+    },
+
+    formatMonth(m) {
+      if (!m) return '';
+      const [y, mo] = String(m).split('-');
+      return `${y}年${parseInt(mo, 10)}月`;
+    },
+
+    // =============================================
+    // ダッシュボード
+    // =============================================
+
+    /**
+     * 最新月のサマリーを計算する
+     */
+    computeDashboard() {
+      if (!this.allMonthlyData || this.allMonthlyData.length === 0) {
+        this.latestTotal      = 0;
+        this.latestMonth      = '';
+        this.latestGenreTotals = [];
+        return;
+      }
+      // allMonthlyData は月昇順なので末尾が最新
+      const latest = this.allMonthlyData[this.allMonthlyData.length - 1];
+      this.latestTotal  = latest.total;
+      this.latestMonth  = latest.month;
+      this.latestGenreTotals = Object.entries(latest.genreTotals || {})
+        .map(([genre_name, total]) => ({ genre_name, total }))
+        .sort((a, b) => b.total - a.total);
+    },
+
+    /**
+     * 資産内訳ドーナツグラフを描画する
+     */
+    updatePieChart() {
+      // 既存インスタンスを破棄（重複描画バグを防止）
+      if (this._pieChart) {
+        this._pieChart.destroy();
+        this._pieChart = null;
+      }
+
+      const ctx = document.getElementById('pieChart');
+      if (!ctx) return;
+
+      const monthData = this.allMonthlyData.find(d => d.month === this.selectedPieMonth);
+      if (!monthData || !monthData.genreTotals) return;
+
+      const entries = Object.entries(monthData.genreTotals)
+        .filter(([, v]) => v > 0)
+        .sort(([, a], [, b]) => b - a);
+
+      if (entries.length === 0) return;
+
+      const labels = entries.map(([g]) => g);
+      const data   = entries.map(([, v]) => v);
+      const total  = data.reduce((s, v) => s + v, 0);
+
+      this._pieChart = new Chart(ctx, {
+        type: 'doughnut',
+        data: {
+          labels,
+          datasets: [{
+            data,
+            backgroundColor: CHART_COLORS.slice(0, labels.length),
+            borderWidth: 2,
+            borderColor: '#1e293b',
+            hoverBorderColor: '#1e293b',
+          }],
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          cutout: '62%',
+          plugins: {
+            legend: {
+              position: 'bottom',
+              labels: {
+                color: '#94a3b8',
+                padding: 14,
+                font: { size: 12, family: "'Noto Sans JP', sans-serif" },
+                boxWidth: 12,
+                boxHeight: 12,
+              },
+            },
+            tooltip: {
+              callbacks: {
+                label: ctx => {
+                  const pct = total > 0 ? ((ctx.raw / total) * 100).toFixed(1) : '0.0';
+                  return ` ${ctx.label}: ¥${ctx.raw.toLocaleString('ja-JP')} (${pct}%)`;
+                },
+              },
+            },
+          },
+        },
+      });
+    },
+
+    /**
+     * 資産推移棒グラフを描画する
+     */
+    updateTrendChart() {
+      if (this._trendChart) {
+        this._trendChart.destroy();
+        this._trendChart = null;
+      }
+
+      const ctx = document.getElementById('trendChart');
+      if (!ctx) return;
+      if (!this.allMonthlyData || this.allMonthlyData.length === 0) return;
+
+      const labels   = this.allMonthlyData.map(d => this.formatMonth(d.month));
+      const isGenre  = this.trendMode === 'genre';
+      let datasets;
+
+      if (!isGenre) {
+        // 総資産モード
+        datasets = [{
+          label: '総資産',
+          data:  this.allMonthlyData.map(d => d.total),
+          backgroundColor: 'rgba(56,189,248,0.7)',
+          borderColor:     'rgba(56,189,248,0)',
+          borderRadius: 6,
+          borderSkipped: false,
+        }];
+      } else {
+        // ジャンル別積み上げモード
+        const allGenres = [
+          ...new Set(
+            this.allMonthlyData.flatMap(d => Object.keys(d.genreTotals || {}))
+          )
+        ];
+        datasets = allGenres.map((genre, i) => ({
+          label: genre,
+          data:  this.allMonthlyData.map(d => (d.genreTotals || {})[genre] || 0),
+          backgroundColor: CHART_COLORS[i % CHART_COLORS.length],
+          borderRadius: 4,
+          borderSkipped: false,
+          stack: 'stack',
+        }));
+      }
+
+      this._trendChart = new Chart(ctx, {
+        type: 'bar',
+        data: { labels, datasets },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          scales: {
+            x: {
+              stacked: isGenre,
+              ticks: { color: '#94a3b8', font: { size: 11 } },
+              grid:  { color: '#1e293b' },
+            },
+            y: {
+              stacked: isGenre,
+              ticks: {
+                color: '#94a3b8',
+                font: { size: 11 },
+                callback: v => '¥' + Number(v).toLocaleString('ja-JP'),
+              },
+              grid: { color: '#334155' },
+            },
+          },
+          plugins: {
+            legend: {
+              display: isGenre,
+              labels: {
+                color: '#94a3b8',
+                font: { size: 12 },
+                boxWidth: 12, boxHeight: 12,
+              },
+            },
+            tooltip: {
+              callbacks: {
+                label: ctx => ` ${ctx.dataset.label}: ¥${Number(ctx.raw).toLocaleString('ja-JP')}`,
+              },
+            },
+          },
+        },
+      });
+    },
+
+    // =============================================
+    // 入力タブ
+    // =============================================
+
+    openInput() {
+      this.tab = 'input';
+      this.loadMonthData();
+    },
+
+    loadMonthData() {
+      this.loading = true;
+      this.loadingText = 'データを取得中...';
+      google.script.run
+        .withSuccessHandler((records) => {
+          this.inputRecords    = records || {};
+          this.hasExistingData = Object.keys(this.inputRecords).length > 0;
+          this.loading = false;
+        })
+        .withFailureHandler((err) => {
+          this.loading = false;
+          this.showToast('データ取得に失敗: ' + (err.message || err), 'error');
+        })
+        .getMonthRecords(this.inputMonth);
+    },
+
+    toggleGenreExpand(genreId) {
+      const idx = this.expandedGenres.indexOf(genreId);
+      if (idx >= 0) this.expandedGenres.splice(idx, 1);
+      else           this.expandedGenres.push(genreId);
+    },
+
+    genreInputTotal(genre) {
+      return genre.items.reduce(
+        (sum, item) => sum + (Number(this.inputRecords[item.item_id]) || 0),
+        0
+      );
+    },
+
+    saveRecords() {
+      this.saving = true;
+      google.script.run
+        .withSuccessHandler((result) => {
+          this.saving = false;
+          if (result.success) {
+            // 月リストに追加（未追加の場合）
+            if (!this.monthList.includes(this.inputMonth)) {
+              this.monthList.unshift(this.inputMonth);
+              this.monthList.sort().reverse();
+            }
+            this.hasExistingData = true;
+            this.refreshData();
+            this.showToast('保存しました！', 'success');
+          } else {
+            this.showToast('保存に失敗しました: ' + (result.error || ''), 'error');
+          }
+        })
+        .withFailureHandler((err) => {
+          this.saving = false;
+          this.showToast('保存に失敗しました: ' + (err.message || err), 'error');
+        })
+        .saveAssetRecords(this.inputMonth, this.inputRecords);
+    },
+
+    confirmDelete(month) {
+      this.deleteTargetMonth = month;
+      this.showDeleteModal   = true;
+    },
+
+    executeDelete() {
+      const month = this.deleteTargetMonth;
+      this.showDeleteModal = false;
+      this.loading     = true;
+      this.loadingText = '削除中...';
+
+      google.script.run
+        .withSuccessHandler((result) => {
+          this.loading = false;
+          if (result.success) {
+            // 今月以外はリストから削除
+            if (month !== this.currentMonth) {
+              this.monthList = this.monthList.filter(m => m !== month);
+              if (this.inputMonth === month) {
+                this.inputMonth = this.monthList[0] || this.currentMonth;
+              }
+            }
+            this.inputRecords    = {};
+            this.hasExistingData = false;
+            this.refreshData();
+            this.showToast('削除しました', 'success');
+          } else {
+            this.showToast('削除に失敗しました: ' + (result.error || ''), 'error');
+          }
+        })
+        .withFailureHandler((err) => {
+          this.loading = false;
+          this.showToast('削除に失敗しました: ' + (err.message || err), 'error');
+        })
+        .deleteMonthRecords(month);
+    },
+
+    // =============================================
+    // 設定タブ
+    // =============================================
+
+    openSettings() {
+      this.tab = 'settings';
+      this.buildSettingsGenres();
+    },
+
+    /**
+     * categories をジャンルごとにグループ化して settingsGenres を構築
+     */
+    buildSettingsGenres() {
+      const genreMap = new Map();
+      this.categories.forEach(cat => {
+        if (!genreMap.has(cat.genre_id)) {
+          genreMap.set(cat.genre_id, {
+            genre_id:    cat.genre_id,
+            genre_name:  cat.genre_name,
+            editing:     false,
+            newItemName: '',
+            items:       [],
+          });
+        }
+        genreMap.get(cat.genre_id).items.push({
+          item_id:   cat.item_id,
+          item_name: cat.item_name,
+          is_active: cat.is_active,
+          editing:   false,
+        });
+      });
+      this.settingsGenres = Array.from(genreMap.values());
+    },
+
+    /**
+     * ジャンルが有効かどうか（アイテムが1つ以上 is_active=true か）
+     */
+    genreIsActive(genre) {
+      return genre.items.some(i => i.is_active);
+    },
+
+    /**
+     * ジャンルの有効/無効を一括切り替え
+     */
+    toggleGenreActive(genre) {
+      const currentlyActive = this.genreIsActive(genre);
+      genre.items.forEach(i => { i.is_active = !currentlyActive; });
+    },
+
+    /**
+     * ジャンルに新しい項目を追加
+     */
+    addItem(genre) {
+      const name = (genre.newItemName || '').trim();
+      if (!name) return;
+      genre.items.push({
+        item_id:   this._generateUUID(),
+        item_name: name,
+        is_active: true,
+        editing:   false,
+      });
+      genre.newItemName = '';
+    },
+
+    /**
+     * 新しいジャンルを追加
+     */
+    addGenre() {
+      const name = (this.newGenreName || '').trim();
+      if (!name) return;
+      this.settingsGenres.push({
+        genre_id:    this._generateUUID(),
+        genre_name:  name,
+        editing:     false,
+        newItemName: '',
+        items:       [],
+      });
+      this.newGenreName = '';
+    },
+
+    /**
+     * settingsGenres をフラット化してサーバーに保存
+     */
+    saveSettings() {
+      // settingsGenres → flat categories array
+      const flat = [];
+      this.settingsGenres.forEach(genre => {
+        genre.items.forEach(item => {
+          flat.push({
+            genre_id:   genre.genre_id,
+            genre_name: genre.genre_name,
+            item_id:    item.item_id,
+            item_name:  item.item_name,
+            is_active:  item.is_active,
+          });
+        });
+      });
+
+      this.savingSettings = true;
+      google.script.run
+        .withSuccessHandler((result) => {
+          this.savingSettings = false;
+          if (result.success) {
+            // フロントエンドのマスタを更新
+            this.categories = flat;
+            // 入力フォームの展開状態を再計算
+            this.expandedGenres = [
+              ...new Set(flat.filter(c => c.is_active).map(c => c.genre_id))
+            ];
+            // ダッシュボードを更新
+            this.refreshData();
+            this.showToast('マスタを保存しました', 'success');
+          } else {
+            this.showToast('保存に失敗しました: ' + (result.error || ''), 'error');
+          }
+        })
+        .withFailureHandler((err) => {
+          this.savingSettings = false;
+          this.showToast('保存に失敗しました: ' + (err.message || err), 'error');
+        })
+        .saveCategories(flat);
+    },
+
+    // =============================================
+    // 共通ユーティリティ
+    // =============================================
+
+    /**
+     * サーバーから全体データを再取得してダッシュボードを更新する
+     */
+    refreshData() {
+      google.script.run
+        .withSuccessHandler((data) => {
+          if (!data) return;
+          this.allMonthlyData = data.allMonthlyData || [];
+          // monthList も最新化
+          const serverMonths = data.monthList || [];
+          if (!serverMonths.includes(this.currentMonth)) {
+            serverMonths.unshift(this.currentMonth);
+          }
+          this.monthList = serverMonths;
+          // selectedPieMonth が月リストにない場合は先頭に補正
+          if (!this.monthList.includes(this.selectedPieMonth)) {
+            this.selectedPieMonth = this.monthList[0] || this.currentMonth;
+          }
+          this.computeDashboard();
+          this.$nextTick(() => {
+            this.updatePieChart();
+            this.updateTrendChart();
+          });
+        })
+        .withFailureHandler(() => { /* ダッシュボード更新失敗は無視 */ })
+        .getInitialData();
+    },
+
+    /**
+     * UUID v4 をクライアントサイドで生成する
+     */
+    _generateUUID() {
+      return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+        const r = (Math.random() * 16) | 0;
+        return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
+      });
+    },
+
+  };
+}
+</script>

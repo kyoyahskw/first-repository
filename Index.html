@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="description" content="Googleスプレッドシートを使った個人資産管理Webアプリ">
+  <title>💰 個人資産管理</title>
+
+  <!-- Alpine.js v3 (CDN) -->
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.1/dist/cdn.min.js"></script>
+  <!-- Chart.js v4 (CDN) -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+  <!-- Font Awesome 6 (CDN) -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
+  <!-- Google Fonts: Noto Sans JP -->
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@300;400;500;700&display=swap" rel="stylesheet">
+
+  <?!= include('Stylesheet'); ?>
+</head>
+<body x-data="assetApp()" x-init="init()">
+
+  <!-- ============================= -->
+  <!-- Loading Overlay               -->
+  <!-- ============================= -->
+  <div class="overlay" x-show="loading" x-cloak>
+    <div class="spinner"></div>
+    <p class="overlay-text" x-text="loadingText"></p>
+  </div>
+
+  <!-- ============================= -->
+  <!-- Toast Notification            -->
+  <!-- ============================= -->
+  <div id="toast" class="toast" :class="[toast.type, toast.show ? 'toast--show' : '']" x-cloak>
+    <i :class="toast.icon"></i>
+    <span x-text="toast.message"></span>
+  </div>
+
+  <!-- ============================= -->
+  <!-- Delete Confirmation Modal     -->
+  <!-- ============================= -->
+  <div class="modal-bg" x-show="showDeleteModal" x-cloak @click.self="showDeleteModal = false">
+    <div class="modal-box" role="dialog" aria-modal="true">
+      <div class="modal-icon"><i class="fas fa-triangle-exclamation"></i></div>
+      <h3 class="modal-title">データを削除しますか？</h3>
+      <p class="modal-body" x-text="`${formatMonth(deleteTargetMonth)} のすべてのデータを完全に削除します。この操作は元に戻せません。`"></p>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="modal-cancel-btn" @click="showDeleteModal = false">キャンセル</button>
+        <button class="btn btn-danger" id="modal-delete-btn" @click="executeDelete()">
+          <i class="fas fa-trash-can"></i> 削除する
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================= -->
+  <!-- App Shell                     -->
+  <!-- ============================= -->
+  <div class="app">
+
+    <!-- Header / Navigation -->
+    <header class="header">
+      <div class="header-inner">
+        <div class="brand">
+          <span class="brand-icon">💰</span>
+          <span class="brand-name">資産管理</span>
+        </div>
+        <nav class="nav" role="navigation" aria-label="メインナビゲーション">
+          <button class="nav-btn" id="tab-dashboard" :class="{active: tab==='dashboard'}" @click="tab='dashboard'" aria-label="ダッシュボード">
+            <i class="fas fa-chart-pie"></i>
+            <span>ダッシュボード</span>
+          </button>
+          <button class="nav-btn" id="tab-input" :class="{active: tab==='input'}" @click="openInput()" aria-label="入力">
+            <i class="fas fa-pen-to-square"></i>
+            <span>入力</span>
+          </button>
+          <button class="nav-btn" id="tab-settings" :class="{active: tab==='settings'}" @click="openSettings()" aria-label="マスタ管理">
+            <i class="fas fa-sliders"></i>
+            <span>管理</span>
+          </button>
+        </nav>
+      </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="content">
+
+      <!-- ===== DASHBOARD TAB ===== -->
+      <div x-show="tab==='dashboard'">
+
+        <!-- 総資産カード -->
+        <div class="total-card">
+          <div class="total-label">総資産額（最新月）</div>
+          <div class="total-value" x-text="formatCurrency(latestTotal)"></div>
+          <div class="total-sub" x-text="latestMonth ? formatMonth(latestMonth) + ' 時点' : 'まだデータがありません'"></div>
+        </div>
+
+        <!-- ジャンル別残高 -->
+        <section class="section" x-show="latestGenreTotals.length > 0">
+          <h2 class="section-title"><i class="fas fa-layer-group"></i> ジャンル別残高</h2>
+          <div class="genre-grid">
+            <template x-for="gt in latestGenreTotals" :key="gt.genre_name">
+              <div class="genre-card">
+                <div class="genre-card-name" x-text="gt.genre_name"></div>
+                <div class="genre-card-amount" x-text="formatCurrency(gt.total)"></div>
+                <div class="progress-bar">
+                  <div class="progress-fill" :style="`width:${latestTotal>0 ? (gt.total/latestTotal*100).toFixed(1) : 0}%`"></div>
+                </div>
+                <div class="genre-card-pct" x-text="`${latestTotal>0 ? ((gt.total/latestTotal)*100).toFixed(1) : '0.0'}%`"></div>
+              </div>
+            </template>
+          </div>
+        </section>
+
+        <!-- グラフエリア（2列グリッド） -->
+        <div class="charts-row">
+
+          <!-- 資産内訳グラフ（ドーナツ） -->
+          <section class="section chart-section">
+            <div class="section-header">
+              <h2 class="section-title"><i class="fas fa-chart-pie"></i> 資産内訳</h2>
+              <select class="select" id="pie-month-select" x-model="selectedPieMonth" @change="updatePieChart()">
+                <template x-for="m in monthList" :key="m">
+                  <option :value="m" x-text="formatMonth(m)"></option>
+                </template>
+              </select>
+            </div>
+            <div class="chart-container">
+              <canvas id="pieChart"></canvas>
+            </div>
+            <p class="chart-empty" x-show="allMonthlyData.length === 0">データがありません</p>
+          </section>
+
+          <!-- 資産推移グラフ（棒グラフ） -->
+          <section class="section chart-section">
+            <div class="section-header">
+              <h2 class="section-title"><i class="fas fa-chart-bar"></i> 資産推移</h2>
+              <div class="toggle-group">
+                <button class="toggle-btn" id="trend-total-btn" :class="{active: trendMode==='total'}" @click="trendMode='total'; updateTrendChart()">総資産</button>
+                <button class="toggle-btn" id="trend-genre-btn" :class="{active: trendMode==='genre'}" @click="trendMode='genre'; updateTrendChart()">ジャンル別</button>
+              </div>
+            </div>
+            <div class="chart-container">
+              <canvas id="trendChart"></canvas>
+            </div>
+            <p class="chart-empty" x-show="allMonthlyData.length === 0">データがありません</p>
+          </section>
+
+        </div><!-- /charts-row -->
+
+      </div><!-- /dashboard -->
+
+      <!-- ===== INPUT TAB ===== -->
+      <div x-show="tab==='input'">
+        <section class="section">
+          <div class="section-header">
+            <h2 class="section-title"><i class="fas fa-calendar-alt"></i> 資産を入力</h2>
+            <select class="select" id="input-month-select" x-model="inputMonth" @change="loadMonthData()">
+              <template x-for="m in monthList" :key="m">
+                <option :value="m" x-text="formatMonth(m)"></option>
+              </template>
+            </select>
+          </div>
+
+          <!-- マスタが空の場合 -->
+          <template x-if="activeGenres.length === 0">
+            <div class="empty-state">
+              <i class="fas fa-layer-group"></i>
+              <p>「管理」タブからジャンルと項目を追加してください</p>
+            </div>
+          </template>
+
+          <!-- 入力アコーディオン -->
+          <div class="accordions">
+            <template x-for="genre in activeGenres" :key="genre.genre_id">
+              <div class="accordion">
+                <button class="accordion-head" type="button"
+                  @click="toggleGenreExpand(genre.genre_id)"
+                  :aria-expanded="expandedGenres.includes(genre.genre_id)"
+                  :id="'acc-head-' + genre.genre_id">
+                  <span class="acc-label" x-text="genre.genre_name"></span>
+                  <span class="acc-total" x-text="formatCurrency(genreInputTotal(genre))"></span>
+                  <i class="fas" :class="expandedGenres.includes(genre.genre_id) ? 'fa-chevron-up' : 'fa-chevron-down'"></i>
+                </button>
+                <div class="accordion-body" x-show="expandedGenres.includes(genre.genre_id)" x-transition>
+                  <template x-for="item in genre.items" :key="item.item_id">
+                    <div class="input-row">
+                      <label class="input-label" :for="'inp-' + item.item_id" x-text="item.item_name"></label>
+                      <div class="input-field-wrap">
+                        <span class="yen-symbol">¥</span>
+                        <input
+                          :id="'inp-' + item.item_id"
+                          type="number"
+                          class="input-field"
+                          x-model.number="inputRecords[item.item_id]"
+                          placeholder="0"
+                          min="0"
+                          inputmode="numeric"
+                        >
+                      </div>
+                    </div>
+                  </template>
+                </div>
+              </div>
+            </template>
+          </div>
+
+          <!-- 入力合計 -->
+          <div class="input-total-bar" x-show="activeGenres.length > 0">
+            <span class="input-total-label">入力合計</span>
+            <span class="input-total-value" x-text="formatCurrency(inputTotal)"></span>
+          </div>
+
+          <!-- アクションボタン -->
+          <div class="btn-row" x-show="activeGenres.length > 0">
+            <button class="btn btn-primary" id="save-record-btn" @click="saveRecords()" :disabled="saving">
+              <i class="fas" :class="saving ? 'fa-spinner fa-spin' : 'fa-floppy-disk'"></i>
+              <span x-text="saving ? '保存中...' : '保存する'"></span>
+            </button>
+            <button class="btn btn-ghost-danger" id="delete-record-btn"
+              @click="confirmDelete(inputMonth)"
+              x-show="hasExistingData">
+              <i class="fas fa-trash-can"></i>
+              <span>この月を削除</span>
+            </button>
+          </div>
+
+        </section>
+      </div><!-- /input -->
+
+      <!-- ===== SETTINGS TAB ===== -->
+      <div x-show="tab==='settings'">
+        <section class="section">
+          <h2 class="section-title"><i class="fas fa-sliders"></i> マスタ管理</h2>
+          <p class="section-desc">ジャンルと資産項目を管理します。「非表示」にした項目は過去データを保持したまま入力フォームから隠れます。変更後は必ず「マスタを保存」してください。</p>
+
+          <!-- ジャンルカード一覧 -->
+          <template x-for="genre in settingsGenres" :key="genre.genre_id">
+            <div class="settings-card" :class="{'settings-card--inactive': !genreIsActive(genre)}">
+              <div class="settings-card-head">
+                <div class="settings-genre-name-wrap">
+                  <span x-show="!genre.editing" class="settings-genre-name" x-text="genre.genre_name"></span>
+                  <input x-show="genre.editing" type="text" class="inline-edit"
+                    x-model="genre.genre_name"
+                    @keydown.enter="genre.editing = false"
+                    @blur="genre.editing = false">
+                </div>
+                <div class="settings-card-actions">
+                  <button class="icon-btn" @click="genre.editing = !genre.editing"
+                    :title="genre.editing ? '確定' : 'ジャンル名を編集'">
+                    <i class="fas" :class="genre.editing ? 'fa-check' : 'fa-pen'"></i>
+                  </button>
+                  <button class="icon-btn" @click="toggleGenreActive(genre)"
+                    :title="genreIsActive(genre) ? 'ジャンルを非表示にする' : 'ジャンルを表示する'">
+                    <i class="fas" :class="genreIsActive(genre) ? 'fa-eye-slash' : 'fa-eye'"></i>
+                  </button>
+                </div>
+              </div>
+
+              <!-- 項目リスト -->
+              <div class="settings-items" x-show="genreIsActive(genre)">
+                <template x-for="item in genre.items" :key="item.item_id">
+                  <div class="settings-item" :class="{'settings-item--inactive': !item.is_active}">
+                    <span x-show="!item.editing" class="settings-item-name" x-text="item.item_name"></span>
+                    <input x-show="item.editing" type="text" class="inline-edit small"
+                      x-model="item.item_name"
+                      @keydown.enter="item.editing = false"
+                      @blur="item.editing = false">
+                    <div class="settings-item-actions">
+                      <button class="icon-btn sm" @click="item.editing = !item.editing"
+                        :title="item.editing ? '確定' : '項目名を編集'">
+                        <i class="fas" :class="item.editing ? 'fa-check' : 'fa-pen'"></i>
+                      </button>
+                      <button class="icon-btn sm" @click="item.is_active = !item.is_active"
+                        :title="item.is_active ? '非表示' : '表示'">
+                        <i class="fas" :class="item.is_active ? 'fa-eye-slash' : 'fa-eye'"></i>
+                      </button>
+                    </div>
+                  </div>
+                </template>
+
+                <!-- 項目追加フォーム -->
+                <div class="add-item-row">
+                  <input type="text" class="add-input" placeholder="＋ 項目を追加"
+                    x-model="genre.newItemName"
+                    @keydown.enter.prevent="addItem(genre)">
+                  <button class="btn btn-xs btn-secondary" @click="addItem(genre)"
+                    :disabled="!genre.newItemName || !genre.newItemName.trim()">追加</button>
+                </div>
+              </div>
+            </div>
+          </template>
+
+          <!-- ジャンル追加フォーム -->
+          <div class="add-genre-card">
+            <h3 class="add-genre-title"><i class="fas fa-plus"></i> ジャンルを追加</h3>
+            <div class="add-genre-row">
+              <input type="text" class="add-input" id="new-genre-input" placeholder="新しいジャンル名"
+                x-model="newGenreName"
+                @keydown.enter.prevent="addGenre()">
+              <button class="btn btn-secondary" id="add-genre-btn" @click="addGenre()"
+                :disabled="!newGenreName || !newGenreName.trim()">追加</button>
+            </div>
+          </div>
+
+          <!-- 保存ボタン -->
+          <div class="btn-row">
+            <button class="btn btn-primary" id="save-settings-btn" @click="saveSettings()" :disabled="savingSettings">
+              <i class="fas" :class="savingSettings ? 'fa-spinner fa-spin' : 'fa-floppy-disk'"></i>
+              <span x-text="savingSettings ? '保存中...' : 'マスタを保存'"></span>
+            </button>
+          </div>
+
+        </section>
+      </div><!-- /settings -->
+
+    </main>
+  </div><!-- /app -->
+
+  <?!= include('JavaScript'); ?>
+</body>
+</html>
