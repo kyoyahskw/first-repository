@@ -25,7 +25,7 @@
 // ============================================================
 // バインドスクリプト（スプレッドシートから起動）の場合は空欄のまま
 // スタンドアロンスクリプトの場合はスプレッドシートIDを記入
-const SPREADSHEET_ID = '';
+const SPREADSHEET_ID = '11oReUY7ZTPW-eJ15XnOQnZ_UpaH3mpiuY5EsIQXvfxM';
 
 // シート名
 const SHEET_CATEGORIES = 'Categories';

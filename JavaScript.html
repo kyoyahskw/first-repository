@@ -161,6 +161,7 @@ function assetApp() {
           this.currentMonth    = data.currentMonth   || '';
           this.allMonthlyData  = data.allMonthlyData || [];
 
+
           // 記録済みの月をinputMonthListに反映（降順）
           const recorded = (data.monthList || []).filter(m => m !== data.currentMonth);
           // 履歴がある月は全て表示する（推山順）
