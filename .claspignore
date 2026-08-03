@@ -1,0 +1,8 @@
+# GAS へのアップロードから除外するファイル
+.git/
+.gitignore
+.claspignore
+test.md
+README.md
+node_modules/
+*.log

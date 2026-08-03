@@ -37,10 +37,11 @@
   <!-- ============================= -->
   <!-- Delete Confirmation Modal     -->
   <!-- ============================= -->
-  <div class="modal-bg" x-show="showDeleteModal" x-cloak @click.self="showDeleteModal = false">
-    <div class="modal-box" role="dialog" aria-modal="true">
+  <div class="modal-bg" x-show="showDeleteModal" x-cloak @click.self="showDeleteModal = false"
+    @keydown.escape.window="showDeleteModal = false">
+    <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="modal-title">
       <div class="modal-icon"><i class="fas fa-triangle-exclamation"></i></div>
-      <h3 class="modal-title">データを削除しますか？</h3>
+      <h3 class="modal-title" id="modal-title">データを削除しますか？</h3>
       <p class="modal-body" x-text="`${formatMonth(deleteTargetMonth)} のすべてのデータを完全に削除します。この操作は元に戻せません。`"></p>
       <div class="modal-actions">
         <button class="btn btn-ghost" id="modal-cancel-btn" @click="showDeleteModal = false">キャンセル</button>
@@ -90,7 +91,10 @@
         <div class="total-card">
           <div class="total-label">総資産額（最新月）</div>
           <div class="total-value" x-text="formatCurrency(latestTotal)"></div>
-          <div class="total-sub" x-text="latestMonth ? formatMonth(latestMonth) + ' 時点' : 'まだデータがありません'"></div>
+          <div class="total-sub">
+            <span x-text="latestMonth ? formatMonth(latestMonth) + ' 時点' : 'まだデータがありません'"></span>
+            <span x-show="latestUpdatedAt" style="margin-left: 8px; font-size: 0.9em; opacity: 0.8;" x-text="'（最終更新: ' + formatDateTime(latestUpdatedAt) + '）'"></span>
+          </div>
         </div>
 
         <!-- ジャンル別残高 -->
@@ -117,16 +121,16 @@
           <section class="section chart-section">
             <div class="section-header">
               <h2 class="section-title"><i class="fas fa-chart-pie"></i> 資産内訳</h2>
-              <select class="select" id="pie-month-select" x-model="selectedPieMonth" @change="updatePieChart()">
+              <select class="select" id="pie-month-select" x-model="selectedPieMonth" @change="$nextTick(() => updatePieChart())">
                 <template x-for="m in monthList" :key="m">
                   <option :value="m" x-text="formatMonth(m)"></option>
                 </template>
               </select>
             </div>
-            <div class="chart-container">
+            <div class="chart-container" x-show="hasPieData">
               <canvas id="pieChart"></canvas>
             </div>
-            <p class="chart-empty" x-show="allMonthlyData.length === 0">データがありません</p>
+            <p class="chart-empty" x-show="!hasPieData">データがありません</p>
           </section>
 
           <!-- 資産推移グラフ（棒グラフ） -->
@@ -134,11 +138,11 @@
             <div class="section-header">
               <h2 class="section-title"><i class="fas fa-chart-bar"></i> 資産推移</h2>
               <div class="toggle-group">
-                <button class="toggle-btn" id="trend-total-btn" :class="{active: trendMode==='total'}" @click="trendMode='total'; updateTrendChart()">総資産</button>
-                <button class="toggle-btn" id="trend-genre-btn" :class="{active: trendMode==='genre'}" @click="trendMode='genre'; updateTrendChart()">ジャンル別</button>
+                <button class="toggle-btn" id="trend-total-btn" :class="{active: trendMode==='total'}" @click="trendMode='total'; $nextTick(() => updateTrendChart())">総資産</button>
+                <button class="toggle-btn" id="trend-genre-btn" :class="{active: trendMode==='genre'}" @click="trendMode='genre'; $nextTick(() => updateTrendChart())">ジャンル別</button>
               </div>
             </div>
-            <div class="chart-container">
+            <div class="chart-container" x-show="allMonthlyData.length > 0">
               <canvas id="trendChart"></canvas>
             </div>
             <p class="chart-empty" x-show="allMonthlyData.length === 0">データがありません</p>
@@ -193,7 +197,10 @@
                           x-model.number="inputRecords[item.item_id]"
                           placeholder="0"
                           min="0"
+                          :max="CONFIG_MAX_AMOUNT"
+                          step="1"
                           inputmode="numeric"
+                          @blur="inputRecords[item.item_id] = Math.max(0, Math.min(999999999, Math.floor(Number(inputRecords[item.item_id]) || 0)))"
                         >
                       </div>
                     </div>

@@ -57,7 +57,13 @@ const REC = {
  * スプレッドシートの初期化を行い、Index.html を返す。
  */
 function doGet(e) {
-  initSpreadsheet_();
+  // Script Properties でフラグ管理し、初回アクセス時のみ初期化を実行
+  // （毎アクセスでシート存在確認する API コールを削減）
+  const props = PropertiesService.getScriptProperties();
+  if (!props.getProperty('initialized')) {
+    initSpreadsheet_();
+    props.setProperty('initialized', 'true');
+  }
   return HtmlService.createTemplateFromFile('Index')
     .evaluate()
     .setTitle('💰 個人資産管理')
@@ -95,6 +101,25 @@ function formatMonthValue_(val) {
     return Utilities.formatDate(val, Session.getScriptTimeZone(), 'yyyy-MM');
   }
   return String(val);
+}
+
+/**
+ * 指定した月のレコードをシートから削除し、残行を返す内部ヘルパー。
+ * saveAssetRecords / deleteMonthRecords の共通処理を集約。
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet
+ * @param {string} month - "YYYY-MM" 形式
+ * @return {Array[]} 削除後に残った行データ
+ */
+function removeMonthRows_(sheet, month) {
+  const last = sheet.getLastRow();
+  if (last < 2) return [];
+  const existing = sheet.getRange(2, 1, last - 1, 4).getValues();
+  const keepRows = existing.filter(r => formatMonthValue_(r[REC.MONTH]) !== month);
+  sheet.getRange(2, 1, last - 1, 4).clearContent();
+  if (keepRows.length > 0) {
+    sheet.getRange(2, 1, keepRows.length, 4).setValues(keepRows);
+  }
+  return keepRows;
 }
 
 // ============================================================
@@ -243,23 +268,35 @@ function buildAllMonthlyData_(categories) {
   const monthMap = {};
   rows.forEach(r => {
     const month  = formatMonthValue_(r[REC.MONTH]);
+    const ts     = String(r[REC.TIMESTAMP] || '');
     const itemId = String(r[REC.ITEM_ID]);
     const amount = Number(r[REC.AMOUNT]) || 0;
     if (!/^\d{4}-\d{2}$/.test(month)) return;
-    if (!monthMap[month]) monthMap[month] = {};
-    monthMap[month][itemId] = amount;
+
+    if (!monthMap[month]) {
+      monthMap[month] = { records: {}, updatedAt: '' };
+    }
+    monthMap[month].records[itemId] = amount;
+
+    // 最新のタイムスタンプを保持
+    if (ts && ts > monthMap[month].updatedAt) {
+      monthMap[month].updatedAt = ts;
+    }
   });
 
   // 月昇順で集計データを構築
   return Object.keys(monthMap).sort().map(month => {
-    const records = monthMap[month];
-    const total   = Object.values(records).reduce((s, v) => s + v, 0);
+    const data        = monthMap[month];
+    const records     = data.records;
+    const updatedAt   = data.updatedAt;
+    const total       = Object.values(records).reduce((s, v) => s + v, 0);
+
     const genreTotals = {};
     Object.entries(records).forEach(([id, amt]) => {
       const genre = itemGenreMap[id] || '不明';
       genreTotals[genre] = (genreTotals[genre] || 0) + amt;
     });
-    return { month, total, genreTotals, records };
+    return { month, total, genreTotals, records, updatedAt };
   });
 }
 
@@ -274,6 +311,17 @@ function buildAllMonthlyData_(categories) {
  * @param {Object} records - { item_id: amount }
  */
 function saveAssetRecords(month, records) {
+  // --- #1 バグ修正: 空レコードの保存は早期リターンでデータ消去を防止 ---
+  if (!records || Object.keys(records).length === 0) {
+    return { success: false, error: '保存するデータがありません。少なくとも1件入力してください。' };
+  }
+
+  // 金額がすべて 0 または null の場合もガード
+  const hasValidAmount = Object.values(records).some(amt => Number(amt) > 0);
+  if (!hasValidAmount) {
+    return { success: false, error: 'すべての金額が 0 です。金額を入力してから保存してください。' };
+  }
+
   const lock = LockService.getScriptLock();
   try {
     lock.waitLock(30000); // 最大30秒待機
@@ -281,23 +329,14 @@ function saveAssetRecords(month, records) {
     const sheet = getSheet_(SHEET_RECORDS);
     const tz    = Session.getScriptTimeZone();
     const ts    = Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd HH:mm:ss');
-    const last  = sheet.getLastRow();
 
-    // 既存データを読み込み、対象月以外を保持（バッチ処理）
-    let keepRows = [];
-    if (last > 1) {
-      const existing = sheet.getRange(2, 1, last - 1, 4).getValues();
-      keepRows = existing.filter(r => formatMonthValue_(r[REC.MONTH]) !== month);
-      sheet.getRange(2, 1, last - 1, 4).clearContent();
-      if (keepRows.length > 0) {
-        sheet.getRange(2, 1, keepRows.length, 4).setValues(keepRows);
-      }
-    }
+    // 共通ヘルパーで対象月を削除（#5 重複コード解消）
+    removeMonthRows_(sheet, month);
 
     // 新しいデータを追記（バッチ書き込み）
-    const newRows = Object.entries(records).map(
-      ([id, amt]) => [month, ts, id, Number(amt) || 0]
-    );
+    const newRows = Object.entries(records)
+      .filter(([, amt]) => Number(amt) > 0)  // 0円項目は保存しない
+      .map(([id, amt]) => [month, ts, id, Number(amt)]);
 
     if (newRows.length > 0) {
       sheet.getRange(sheet.getLastRow() + 1, 1, newRows.length, 4).setValues(newRows);
@@ -320,16 +359,9 @@ function deleteMonthRecords(month) {
   try {
     lock.waitLock(30000);
 
+    // 共通ヘルパーで対象月を削除（#5 重複コード解消）
     const sheet = getSheet_(SHEET_RECORDS);
-    const last  = sheet.getLastRow();
-    if (last < 2) return { success: true };
-
-    const existing = sheet.getRange(2, 1, last - 1, 4).getValues();
-    const keepRows = existing.filter(r => formatMonthValue_(r[REC.MONTH]) !== month);
-    sheet.getRange(2, 1, last - 1, 4).clearContent();
-    if (keepRows.length > 0) {
-      sheet.getRange(2, 1, keepRows.length, 4).setValues(keepRows);
-    }
+    removeMonthRows_(sheet, month);
 
     return { success: true };
   } catch (e) {
