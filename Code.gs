@@ -94,13 +94,27 @@ function getSheet_(name) {
 }
 
 /**
- * 月の値が Date オブジェクトになってしまった場合に対応するフォーマッタ
+ * 月の値が Date オブジェクトや様々な文字列フォーマットになった場合に対応するフォーマッタ。
+ * Google Sheets が "2026-07" を日付型に自動変換する場合も含めて対応。
  */
 function formatMonthValue_(val) {
+  if (val === null || val === undefined || val === '') return '';
+
+  // Date オブジェクトの場合（Sheets が日付型に自動変換した場合など）
   if (Object.prototype.toString.call(val) === '[object Date]') {
     return Utilities.formatDate(val, Session.getScriptTimeZone(), 'yyyy-MM');
   }
-  return String(val);
+
+  const str = String(val).trim();
+
+  // 既に YYYY-MM 形式
+  if (/^\d{4}-\d{2}$/.test(str)) return str;
+
+  // YYYY-MM-DD または YYYY/MM/DD 形式（先頭の YYYY-MM を抽出）
+  const match = str.match(/^(\d{4})[-\/](\d{1,2})/);
+  if (match) return `${match[1]}-${String(match[2]).padStart(2, '0')}`;
+
+  return str;
 }
 
 /**
