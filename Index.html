@@ -53,6 +53,36 @@
   </div>
 
   <!-- ============================= -->
+  <!-- Add Month Modal               -->
+  <!-- ============================= -->
+  <div class="modal-bg" x-show="showAddMonthModal" x-cloak @click.self="showAddMonthModal = false"
+    @keydown.escape.window="showAddMonthModal = false">
+    <div class="modal-box" role="dialog" aria-modal="true" aria-labelledby="add-month-modal-title">
+      <div class="modal-icon" style="background: rgba(56,189,248,0.15); color: var(--blue);"><i class="fas fa-calendar-plus"></i></div>
+      <h3 class="modal-title" id="add-month-modal-title">月を追加</h3>
+      <p class="modal-body">入力する年月を選択してください</p>
+      <div class="add-month-selects">
+        <select class="select" id="add-month-year-select" x-model="addMonthYear">
+          <template x-for="y in addMonthYearOptions" :key="y">
+            <option :value="y" x-text="y + '年'"></option>
+          </template>
+        </select>
+        <select class="select" id="add-month-month-select" x-model="addMonthMonth">
+          <template x-for="m in 12" :key="m">
+            <option :value="String(m).padStart(2,'0')" x-text="m + '月'"></option>
+          </template>
+        </select>
+      </div>
+      <div class="modal-actions">
+        <button class="btn btn-ghost" id="add-month-cancel-btn" @click="showAddMonthModal = false">キャンセル</button>
+        <button class="btn btn-primary" id="add-month-confirm-btn" @click="confirmAddMonth()">
+          <i class="fas fa-plus"></i> 追加する
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ============================= -->
   <!-- App Shell                     -->
   <!-- ============================= -->
   <div class="app">
@@ -155,17 +185,36 @@
       <!-- ===== INPUT TAB ===== -->
       <div x-show="tab==='input'">
         <section class="section">
-          <div class="section-header">
-            <h2 class="section-title"><i class="fas fa-calendar-alt"></i> 資産を入力</h2>
-            <select class="select" id="input-month-select" x-model="inputMonth" @change="loadMonthData()">
-              <template x-for="m in monthList" :key="m">
-                <option :value="m" x-text="formatMonth(m)"></option>
+          <h2 class="section-title"><i class="fas fa-calendar-alt"></i> 資産を入力</h2>
+
+          <!-- 月タブ一覧 + 追加ボタン -->
+          <div class="month-tabs-wrap">
+            <div class="month-tabs" id="month-tabs">
+              <template x-for="m in inputMonthList" :key="m">
+                <button
+                  class="month-tab"
+                  :class="{ active: inputMonth === m }"
+                  :id="'month-tab-' + m"
+                  @click="selectInputMonth(m)"
+                  x-text="formatMonth(m)"
+                ></button>
               </template>
-            </select>
+            </div>
+            <button class="month-tab-add" id="add-month-btn" @click="openAddMonthModal()" title="月を追加">
+              <i class="fas fa-plus"></i>
+            </button>
           </div>
 
+          <!-- 月が未選択の場合 -->
+          <template x-if="inputMonthList.length === 0">
+            <div class="empty-state">
+              <i class="fas fa-calendar-plus"></i>
+              <p>「＋」ボタンから入力する月を追加してください</p>
+            </div>
+          </template>
+
           <!-- マスタが空の場合 -->
-          <template x-if="activeGenres.length === 0">
+          <template x-if="inputMonthList.length > 0 && activeGenres.length === 0">
             <div class="empty-state">
               <i class="fas fa-layer-group"></i>
               <p>「管理」タブからジャンルと項目を追加してください</p>
@@ -173,7 +222,7 @@
           </template>
 
           <!-- 入力アコーディオン -->
-          <div class="accordions">
+          <div class="accordions" x-show="inputMonthList.length > 0 && activeGenres.length > 0">
             <template x-for="genre in activeGenres" :key="genre.genre_id">
               <div class="accordion">
                 <button class="accordion-head" type="button"
@@ -211,13 +260,13 @@
           </div>
 
           <!-- 入力合計 -->
-          <div class="input-total-bar" x-show="activeGenres.length > 0">
+          <div class="input-total-bar" x-show="inputMonthList.length > 0 && activeGenres.length > 0">
             <span class="input-total-label">入力合計</span>
             <span class="input-total-value" x-text="formatCurrency(inputTotal)"></span>
           </div>
 
           <!-- アクションボタン -->
-          <div class="btn-row" x-show="activeGenres.length > 0">
+          <div class="btn-row" x-show="inputMonthList.length > 0 && activeGenres.length > 0">
             <button class="btn btn-primary" id="save-record-btn" @click="saveRecords()" :disabled="saving">
               <i class="fas" :class="saving ? 'fa-spinner fa-spin' : 'fa-floppy-disk'"></i>
               <span x-text="saving ? '保存中...' : '保存する'"></span>

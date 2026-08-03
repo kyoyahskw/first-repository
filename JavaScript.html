@@ -79,6 +79,15 @@ function assetApp() {
     expandedGenres:   [],    // 展開中のジャンルID
     saving:           false,
 
+    // --- 月追加モーダル ---
+    showAddMonthModal: false,
+    addMonthYear:      '',
+    addMonthMonth:     '',
+    addMonthYearOptions: [],
+
+    // --- 入力タブの表示月リスト（ユーザーが追加した月のみ） ---
+    inputMonthList:    [],
+
     // --- 設定タブ ---
     settingsGenres: [],
     newGenreName:   '',
@@ -138,6 +147,13 @@ function assetApp() {
      */
     init() {
       this.loadingText = '初期データを読み込み中...';
+
+      // 月追加モーダル用の年リストを準備（現在年かラ5年前まで）
+      const nowYear = new Date().getFullYear();
+      this.addMonthYearOptions = Array.from({ length: 6 }, (_, i) => nowYear - i);
+      this.addMonthYear  = String(nowYear);
+      this.addMonthMonth = String(new Date().getMonth() + 1).padStart(2, '0');
+
       google.script.run
         .withSuccessHandler((data) => {
           this.categories      = data.categories     || [];
@@ -145,7 +161,17 @@ function assetApp() {
           this.currentMonth    = data.currentMonth   || '';
           this.allMonthlyData  = data.allMonthlyData || [];
 
-          this.inputMonth       = data.currentMonth;
+          // 記録済みの月をinputMonthListに反映（降順）
+          const recorded = (data.monthList || []).filter(m => m !== data.currentMonth);
+          // 履歴がある月は全て表示する（推山順）
+          this.inputMonthList = [...(data.monthList || [])].sort().reverse();
+
+          // 現在月は常に先頭にで6表示する
+          if (!this.inputMonthList.includes(data.currentMonth)) {
+            this.inputMonthList.unshift(data.currentMonth);
+          }
+
+          this.inputMonth       = this.inputMonthList[0] || data.currentMonth;
           this.selectedPieMonth = this.monthList[0] || data.currentMonth;
 
           // 有効なジャンルをデフォルト展開
@@ -155,6 +181,9 @@ function assetApp() {
 
           this.computeDashboard();
           this.loading = false;
+
+          // 入力タブ用に先頭月のデータをロード
+          if (this.inputMonth) this.loadMonthData();
 
           // Alpine が DOM を更新した後にグラフを描画
           this.$nextTick(() => {
@@ -427,6 +456,45 @@ function assetApp() {
 
     openInput() {
       this.tab = 'input';
+      if (this.inputMonth) this.loadMonthData();
+    },
+
+    /**
+     * 月タブを選択したときの処理
+     */
+    selectInputMonth(month) {
+      this.inputMonth = month;
+      this.loadMonthData();
+    },
+
+    /**
+     * 月追加モーダルを開く
+     */
+    openAddMonthModal() {
+      // 当月を初期値にセット
+      const now = new Date();
+      this.addMonthYear  = String(now.getFullYear());
+      this.addMonthMonth = String(now.getMonth() + 1).padStart(2, '0');
+      this.showAddMonthModal = true;
+    },
+
+    /**
+     * 月追加を確定する
+     */
+    confirmAddMonth() {
+      const month = `${this.addMonthYear}-${this.addMonthMonth}`;
+      this.showAddMonthModal = false;
+
+      // 既に追加済みの場合はその月を選択するだけ
+      if (this.inputMonthList.includes(month)) {
+        this.inputMonth = month;
+        this.loadMonthData();
+        return;
+      }
+
+      // リストに追加して降順ソート
+      this.inputMonthList = [...this.inputMonthList, month].sort().reverse();
+      this.inputMonth = month;
       this.loadMonthData();
     },
 
@@ -485,10 +553,13 @@ function assetApp() {
         .withSuccessHandler((result) => {
           this.saving = false;
           if (result.success) {
-            // 月リストに追加（未追加の場合）
+            // monthList・inputMonthList に追加（未追加の場合）
             if (!this.monthList.includes(this.inputMonth)) {
               this.monthList.unshift(this.inputMonth);
               this.monthList.sort().reverse();
+            }
+            if (!this.inputMonthList.includes(this.inputMonth)) {
+              this.inputMonthList = [...this.inputMonthList, this.inputMonth].sort().reverse();
             }
             this.hasExistingData = true;
             // キャッシュを更新して refreshData の呼び出し回数を削減

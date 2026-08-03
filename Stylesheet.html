@@ -888,4 +888,95 @@ body {
   }
   .chart-container { height: 300px; }
 }
+
+/* ============================================================
+   月タブ UI（入力タブ）
+   ============================================================ */
+.month-tabs-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 20px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--bg3) transparent;
+}
+
+.month-tabs {
+  display: flex;
+  gap: 8px;
+  flex-wrap: nowrap;
+  flex: 1;
+  overflow-x: auto;
+  padding-bottom: 2px;
+}
+
+.month-tab {
+  flex-shrink: 0;
+  padding: 8px 18px;
+  border-radius: 999px;
+  border: 1.5px solid var(--border);
+  background: var(--bg2);
+  color: var(--text2);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.18s ease;
+  white-space: nowrap;
+  font-family: inherit;
+}
+
+.month-tab:hover {
+  border-color: var(--blue);
+  color: var(--blue);
+  background: rgba(56, 189, 248, 0.08);
+}
+
+.month-tab.active {
+  background: linear-gradient(135deg, var(--blue), var(--blue2));
+  border-color: transparent;
+  color: #fff;
+  font-weight: 700;
+  box-shadow: 0 2px 12px rgba(56, 189, 248, 0.35);
+}
+
+.month-tab-add {
+  flex-shrink: 0;
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  border: 1.5px dashed var(--border);
+  background: transparent;
+  color: var(--text3);
+  font-size: 15px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.18s ease;
+  font-family: inherit;
+}
+
+.month-tab-add:hover {
+  border-color: var(--blue);
+  color: var(--blue);
+  background: rgba(56, 189, 248, 0.08);
+  border-style: solid;
+}
+
+/* モーダル内 年/月セレクト並び */
+.add-month-selects {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  margin: 12px 0 4px;
+}
+
+.add-month-selects .select {
+  flex: 1;
+  max-width: 140px;
+  text-align: center;
+}
 </style>
+
