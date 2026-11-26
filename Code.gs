@@ -325,6 +325,11 @@ function buildAllMonthlyData_(categories) {
  * @param {Object} records - { item_id: amount }
  */
 function saveAssetRecords(month, records) {
+  // 月の形式チェック
+  if (!/^\d{4}-\d{2}$/.test(String(month))) {
+    return { success: false, error: '月の形式が不正です。' };
+  }
+
   // --- #1 バグ修正: 空レコードの保存は早期リターンでデータ消去を防止 ---
   if (!records || Object.keys(records).length === 0) {
     return { success: false, error: '保存するデータがありません。少なくとも1件入力してください。' };
@@ -334,6 +339,15 @@ function saveAssetRecords(month, records) {
   const hasValidAmount = Object.values(records).some(amt => Number(amt) > 0);
   if (!hasValidAmount) {
     return { success: false, error: 'すべての金額が 0 です。金額を入力してから保存してください。' };
+  }
+
+  // サーバー側でも金額を検証する（フロントを経由しない保存への対策）
+  const hasInvalidAmount = Object.values(records).some(amt => {
+    const v = Number(amt);
+    return !isFinite(v) || v < 0 || v > 999999999 || Math.floor(v) !== v;
+  });
+  if (hasInvalidAmount) {
+    return { success: false, error: '金額に不正な値が含まれています（0〜999,999,999の整数で入力してください）。' };
   }
 
   const lock = LockService.getScriptLock();
@@ -390,6 +404,11 @@ function deleteMonthRecords(month) {
  * @param {Array} categoriesData - [{genre_id, genre_name, item_id, item_name, is_active}]
  */
 function saveCategories(categoriesData) {
+  // 空データでマスタを全件消去しないためのガード
+  if (!categoriesData || categoriesData.length === 0) {
+    return { success: false, error: 'マスタデータが空のため、保存を中止しました。' };
+  }
+
   const lock = LockService.getScriptLock();
   try {
     lock.waitLock(30000);

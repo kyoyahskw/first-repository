@@ -221,6 +221,13 @@
             </div>
           </template>
 
+          <!-- 前月引き継ぎバナー -->
+          <div class="carryover-banner" x-show="carryoverMonth" x-cloak>
+            <i class="fas fa-clock-rotate-left"></i>
+            <span x-text="`${formatMonth(carryoverMonth)}の金額を引き継いで表示しています。変わった項目だけ書き換えて保存してください。`"></span>
+            <button class="btn btn-xs btn-ghost" @click="clearCarryover()">空欄に戻す</button>
+          </div>
+
           <!-- 入力アコーディオン -->
           <div class="accordions" x-show="inputMonthList.length > 0 && activeGenres.length > 0">
             <template x-for="genre in activeGenres" :key="genre.genre_id">
@@ -230,6 +237,7 @@
                   :aria-expanded="expandedGenres.includes(genre.genre_id)"
                   :id="'acc-head-' + genre.genre_id">
                   <span class="acc-label" x-text="genre.genre_name"></span>
+                  <span class="acc-delta" x-show="prevMonth" :class="deltaClass(genreDelta(genre))" x-text="formatDelta(genreDelta(genre))"></span>
                   <span class="acc-total" x-text="formatCurrency(genreInputTotal(genre))"></span>
                   <i class="fas" :class="expandedGenres.includes(genre.genre_id) ? 'fa-chevron-up' : 'fa-chevron-down'"></i>
                 </button>
@@ -252,6 +260,7 @@
                           @blur="inputRecords[item.item_id] = Math.max(0, Math.min(999999999, Math.floor(Number(inputRecords[item.item_id]) || 0)))"
                         >
                       </div>
+                      <span class="input-delta" x-show="prevMonth" :class="deltaClass(itemDelta(item.item_id))" x-text="formatDelta(itemDelta(item.item_id))"></span>
                     </div>
                   </template>
                 </div>
@@ -262,7 +271,10 @@
           <!-- 入力合計 -->
           <div class="input-total-bar" x-show="inputMonthList.length > 0 && activeGenres.length > 0">
             <span class="input-total-label">入力合計</span>
-            <span class="input-total-value" x-text="formatCurrency(inputTotal)"></span>
+            <span class="input-total-right">
+              <span class="total-delta" x-show="prevMonth" :class="deltaClass(totalDelta())" x-text="`${formatMonth(prevMonth)}比 ${formatDelta(totalDelta())}`"></span>
+              <span class="input-total-value" x-text="formatCurrency(inputTotal)"></span>
+            </span>
           </div>
 
           <!-- アクションボタン -->

@@ -595,6 +595,36 @@ body {
 
 .input-total-label { font-size: 14px; color: var(--text2); }
 
+/* --- 前月引き継ぎバナー --- */
+.carryover-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  margin-bottom: 14px;
+  background: rgba(245,158,11,0.10);
+  border: 1px solid rgba(245,158,11,0.35);
+  border-radius: 10px;
+  color: var(--text2);
+  font-size: 13px;
+}
+.carryover-banner i { color: var(--amber); flex-shrink: 0; }
+.carryover-banner span { flex: 1; }
+
+/* --- 前月比表示 --- */
+.input-delta {
+  font-size: 12px;
+  font-weight: 600;
+  min-width: 88px;
+  text-align: right;
+}
+.acc-delta { font-size: 12px; font-weight: 600; }
+.input-total-right { display: flex; align-items: center; }
+.total-delta { font-size: 13px; font-weight: 600; margin-right: 14px; }
+.delta-plus  { color: #4ade80; }
+.delta-minus { color: #f87171; }
+.delta-zero  { color: var(--text3); }
+
 .input-total-value {
   font-size: 22px;
   font-weight: 700;

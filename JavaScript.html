@@ -76,6 +76,9 @@ function assetApp() {
     inputMonth:       '',
     inputRecords:     {},    // { item_id: number }
     hasExistingData:  false,
+    carryoverMonth:   '',    // 前月引き継ぎ元の月（引き継ぎ表示中のみセット）
+    prevMonth:        '',    // 前月比の比較対象月（inputMonthより前で記録がある直近月）
+    prevRecords:      {},    // 比較対象月のレコード { item_id: number }
     expandedGenres:   [],    // 展開中のジャンルID
     saving:           false,
 
@@ -499,12 +502,65 @@ function assetApp() {
       this.loadMonthData();
     },
 
+    /**
+     * 指定月より前で、記録がある直近の月のデータを返す（なければ null）
+     */
+    prevRecordedMonthData(month) {
+      let best = null;
+      (this.allMonthlyData || []).forEach(d => {
+        if (d.month < month && d.records && Object.keys(d.records).length > 0) {
+          if (!best || d.month > best.month) best = d;
+        }
+      });
+      return best;
+    },
+
+    /**
+     * 前月比の比較対象（inputMonthより前で記録がある直近月）を更新する
+     */
+    updatePrevComparison() {
+      const prev = this.prevRecordedMonthData(this.inputMonth);
+      this.prevMonth   = prev ? prev.month : '';
+      this.prevRecords = prev ? { ...prev.records } : {};
+    },
+
+    /**
+     * 記録がない月に、前月（記録がある直近月）の金額を引き継いで初期表示する。
+     * 引き継ぎ元がなければ空欄のままにする。
+     */
+    applyCarryoverOrEmpty_() {
+      const prev = this.prevRecordedMonthData(this.inputMonth);
+      if (prev) {
+        this.inputRecords   = { ...prev.records };
+        this.carryoverMonth = prev.month;
+      } else {
+        this.inputRecords   = {};
+        this.carryoverMonth = '';
+      }
+      this.hasExistingData = false;
+      this.updatePrevComparison();
+    },
+
+    /**
+     * 引き継いだ金額をすべて空欄に戻す
+     */
+    clearCarryover() {
+      this.inputRecords   = {};
+      this.carryoverMonth = '';
+    },
+
     loadMonthData() {
+      this.carryoverMonth = '';
       // #6: allMonthlyData にキャッシュがある月はサーバー呼び出しをスキップ
       const cached = this.allMonthlyData.find(d => d.month === this.inputMonth);
       if (cached) {
-        this.inputRecords    = { ...cached.records };
-        this.hasExistingData = Object.keys(this.inputRecords).length > 0;
+        if (Object.keys(cached.records || {}).length > 0) {
+          this.inputRecords    = { ...cached.records };
+          this.hasExistingData = true;
+          this.updatePrevComparison();
+        } else {
+          this.applyCarryoverOrEmpty_();
+        }
         return;
       }
 
@@ -512,9 +568,15 @@ function assetApp() {
       this.loadingText = 'データを取得中...';
       google.script.run
         .withSuccessHandler((records) => {
-          this.inputRecords    = records || {};
-          this.hasExistingData = Object.keys(this.inputRecords).length > 0;
           this.loading = false;
+          if (records && Object.keys(records).length > 0) {
+            this.inputRecords    = records;
+            this.hasExistingData = true;
+            this.updatePrevComparison();
+          } else {
+            // 記録がない月は前月の金額を引き継いで初期表示する
+            this.applyCarryoverOrEmpty_();
+          }
         })
         .withFailureHandler((err) => {
           this.loading = false;
@@ -522,6 +584,52 @@ function assetApp() {
           this.showToast(formatGasError_(err), 'error');
         })
         .getMonthRecords(this.inputMonth);
+    },
+
+    /**
+     * 項目の前月比（比較対象月がない場合は null）
+     */
+    itemDelta(itemId) {
+      if (!this.prevMonth) return null;
+      return (Number(this.inputRecords[itemId]) || 0) - (Number(this.prevRecords[itemId]) || 0);
+    },
+
+    /**
+     * ジャンルの前月比（比較対象月がない場合は null）
+     */
+    genreDelta(genre) {
+      if (!this.prevMonth) return null;
+      return genre.items.reduce(
+        (s, item) => s + ((Number(this.inputRecords[item.item_id]) || 0) - (Number(this.prevRecords[item.item_id]) || 0)),
+        0
+      );
+    },
+
+    /**
+     * 合計の前月比（比較対象月がない場合は null）
+     */
+    totalDelta() {
+      if (!this.prevMonth) return null;
+      const prevTotal = Object.values(this.prevRecords)
+        .reduce((s, v) => s + (Number(v) || 0), 0);
+      return this.inputTotal - prevTotal;
+    },
+
+    /**
+     * 前月比の表示文字列（+¥1,000 / −¥1,000 / ±¥0）
+     */
+    formatDelta(v) {
+      if (v === null || v === undefined) return '';
+      if (v === 0) return '±¥0';
+      return (v > 0 ? '+' : '−') + '¥' + Math.abs(v).toLocaleString('ja-JP');
+    },
+
+    /**
+     * 前月比の表示色クラス
+     */
+    deltaClass(v) {
+      if (v === null || v === undefined || v === 0) return 'delta-zero';
+      return v > 0 ? 'delta-plus' : 'delta-minus';
     },
 
     toggleGenreExpand(genreId) {
@@ -563,6 +671,7 @@ function assetApp() {
               this.inputMonthList = [...this.inputMonthList, this.inputMonth].sort().reverse();
             }
             this.hasExistingData = true;
+            this.carryoverMonth  = '';
             // キャッシュを更新して refreshData の呼び出し回数を削減
             this.refreshData();
             this.showToast('保存しました！', 'success');
@@ -593,15 +702,17 @@ function assetApp() {
         .withSuccessHandler((result) => {
           this.loading = false;
           if (result.success) {
-            // 今月以外はリストから削除
+            // 今月以外はリストから削除（入力タブの月リストからも外す）
             if (month !== this.currentMonth) {
-              this.monthList = this.monthList.filter(m => m !== month);
+              this.monthList      = this.monthList.filter(m => m !== month);
+              this.inputMonthList = this.inputMonthList.filter(m => m !== month);
               if (this.inputMonth === month) {
-                this.inputMonth = this.monthList[0] || this.currentMonth;
+                this.inputMonth = this.inputMonthList[0] || this.monthList[0] || this.currentMonth;
               }
             }
             this.inputRecords    = {};
             this.hasExistingData = false;
+            this.carryoverMonth  = '';
             this.refreshData();
             this.showToast('削除しました', 'success');
           } else {
